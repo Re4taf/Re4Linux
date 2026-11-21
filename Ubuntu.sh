@@ -68,10 +68,7 @@ if [ ! -e "${ROOTFS_DIR}/.installed" ] || [ ! -x "${ROOTFS_DIR}/usr/bin/env" ]; 
         grep -q ":971:" /etc/group || echo "hostgroup971:x:971:" >> /etc/group
         export DEBIAN_FRONTEND=noninteractive
         apt-get update && apt-get upgrade -y
-        apt-get install -y --no-install-recommends \
-            xfce4 xfce4-goodies xfce4-terminal \
-            dbus-x11 tigervnc-standalone-server tigervnc-common \
-            sudo wget curl ca-certificates nano less fonts-dejavu-core
+        apt-get install -y --no-install-recommends && xfce4 xfce4-goodies xfce4-terminal && dbus-x11 tigervnc-standalone-server tigervnc-common && sudo wget curl ca-certificates nano less fonts-dejavu-core
         apt-get clean
         rm -rf /var/lib/apt/lists/*
     '

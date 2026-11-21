@@ -1,17 +1,15 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/bin/sh
 
 #############################################
-# Termux Ubuntu XFCE + VNC (Harbor-Style)   #
+# Pterodactyl Ubuntu XFCE + VNC (Harbor)    #
 #############################################
 
-# Define the root directory inside Termux home
-ROOTFS_DIR="$HOME/ubuntu-rootfs"
-
-# Ubuntu Base release configuration (24.04 LTS Noble)
+ROOTFS_DIR=/home/container
+PROOT_BIN="${ROOTFS_DIR}/usr/local/bin/proot"
 UBUNTU_VERSION="24.04"
 UBUNTU_RELEASE="24.04.1"
+PROOT_VERSION="5.3.0"
 
-# Detect machine architecture and map to Ubuntu tarball naming
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then
     ARCH_ALT="amd64"
@@ -22,16 +20,8 @@ else
     exit 1
 fi
 
-# Ensure host Termux dependencies (proot, curl, tar, pulseaudio) are present
-if ! command -v proot >/dev/null 2>&1 || ! command -v pulseaudio >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
-    echo "[*] Installing required Termux host packages..."
-    pkg update -y && pkg install -y proot curl tar pulseaudio
-fi
-
-# Helper function to execute commands inside the PRoot Ubuntu environment
 run_proot() {
-    unset LD_PRELOAD
-    proot \
+    "${PROOT_BIN}" \
         --rootfs="${ROOTFS_DIR}" \
         --link2symlink \
         --kill-on-exit \
@@ -40,40 +30,43 @@ run_proot() {
         --bind=/dev \
         --bind=/proc \
         --bind=/sys \
-        --bind=/data/data/com.termux/files/usr/tmp:/tmp \
+        --bind=/tmp \
         /usr/bin/env -i \
         HOME=/root \
-        TERM="$TERM" \
+        TERM=xterm \
         PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
         LANG=C.UTF-8 \
         /bin/bash -c "$1"
 }
 
 ###########################################
-# Download & Extract Ubuntu Base RootFS   #
+# Download & Extract Ubuntu + Static PRoot #
 ###########################################
 
 if [ ! -e "${ROOTFS_DIR}/.installed" ]; then
     echo "[1/4] Downloading Ubuntu ${UBUNTU_RELEASE} (${ARCH_ALT}) base rootfs..."
-    mkdir -p "${ROOTFS_DIR}"
-    curl -Lo "${TMPDIR:-/data/data/com.termux/files/usr/tmp}/ubuntu-rootfs.tar.gz" \
+    curl -Lo /tmp/ubuntu-rootfs.tar.gz \
         "https://cdimage.ubuntu.com/ubuntu-base/releases/${UBUNTU_VERSION}/release/ubuntu-base-${UBUNTU_RELEASE}-base-${ARCH_ALT}.tar.gz"
 
-    echo "[2/4] Extracting rootfs to ${ROOTFS_DIR}..."
-    tar -xzf "${TMPDIR:-/data/data/com.termux/files/usr/tmp}/ubuntu-rootfs.tar.gz" -C "${ROOTFS_DIR}" --exclude='dev/*'
-    rm -f "${TMPDIR:-/data/data/com.termux/files/usr/tmp}/ubuntu-rootfs.tar.gz"
+    echo "[2/4] Extracting rootfs and downloading static PRoot..."
+    tar -xzf /tmp/ubuntu-rootfs.tar.gz -C "${ROOTFS_DIR}" --exclude='dev/*'
+    rm -f /tmp/ubuntu-rootfs.tar.gz
 
-    # Configure DNS nameservers
+    mkdir -p "${ROOTFS_DIR}/usr/local/bin"
+    curl -Lo "${PROOT_BIN}" \
+        "https://github.com/proot-me/proot/releases/download/v${PROOT_VERSION}/proot-v${PROOT_VERSION}-${ARCH}-static"
+    chmod 755 "${PROOT_BIN}"
+
     printf "nameserver 1.1.1.1\nnameserver 1.0.0.1\n" > "${ROOTFS_DIR}/etc/resolv.conf"
     echo "127.0.0.1 localhost" > "${ROOTFS_DIR}/etc/hosts"
 fi
 
 ###########################################
-# Package Installation & XFCE/VNC Setup   #
+# Install XFCE4, D-Bus & TigerVNC         #
 ###########################################
 
 if [ ! -e "${ROOTFS_DIR}/.installed" ]; then
-    echo "[3/4] Installing XFCE4, TigerVNC, and D-Bus inside Ubuntu (this may take a few minutes)..."
+    echo "[3/4] Installing XFCE4 and TigerVNC inside Ubuntu..."
     run_proot '
         export DEBIAN_FRONTEND=noninteractive
         apt-get update && apt-get upgrade -y
@@ -88,7 +81,6 @@ if [ ! -e "${ROOTFS_DIR}/.installed" ]; then
     echo "[4/4] Configuring TigerVNC startup script and default password ('ubuntu')..."
     run_proot '
         mkdir -p /root/.vnc
-
         cat << "EOF" > /root/.vnc/xstartup
 #!/bin/sh
 unset SESSION_MANAGER
@@ -99,27 +91,19 @@ chmod 700 $XDG_RUNTIME_DIR
 dbus-launch --exit-with-session startxfce4 &
 EOF
         chmod +x /root/.vnc/xstartup
-
-        # Set default VNC password to "ubuntu"
         printf "ubuntu\nubuntu\nn\n" | vncpasswd >/dev/null 2>&1
     '
 
-    # Mark installation complete (Harbor style flag)
     touch "${ROOTFS_DIR}/.installed"
 fi
 
 ###########################################
-# Start Audio, VNC Server & Enter PRoot   #
+# Start VNC Server & Enter PRoot          #
 ###########################################
 
-# Start PulseAudio on Termux host for audio forwarding
-pulseaudio --start --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" --exit-idle-time=-1 2>/dev/null
-
-# Clean stale VNC locks and start TigerVNC inside Ubuntu
 run_proot '
     vncserver -kill :1 >/dev/null 2>&1
     rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1
-    export PULSE_SERVER=127.0.0.1
     vncserver :1 -geometry 1280x720 -depth 24 -localhost no
 '
 
@@ -133,18 +117,15 @@ clear && cat << 'EOF'
   ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝   ╚═╝    ╚═════╝ 
 
  Welcome to Ubuntu 24.04 LTS (XFCE + TigerVNC PRoot)!
- 
-  -> VNC Server   : 127.0.0.1:5901 (Display :1)
-  -> VNC Password : ubuntu (change with: vncpasswd)
-  -> Audio Server : PulseAudio active on 127.0.0.1
+
+  -> VNC Display  : :1 (Port 5901)
+  -> VNC Password : ubuntu
   -> Stop VNC     : vncserver -kill :1
   -> Restart VNC  : vncserver :1 -geometry 1280x720 -depth 24 -localhost no
 
 EOF
 
-# Drop directly into the interactive Ubuntu PRoot shell (Harbor style)
-unset LD_PRELOAD
-exec proot \
+exec "${PROOT_BIN}" \
     --rootfs="${ROOTFS_DIR}" \
     --link2symlink \
     --kill-on-exit \
@@ -153,11 +134,10 @@ exec proot \
     --bind=/dev \
     --bind=/proc \
     --bind=/sys \
-    --bind=/data/data/com.termux/files/usr/tmp:/tmp \
+    --bind=/tmp \
     /usr/bin/env -i \
     HOME=/root \
-    TERM="$TERM" \
+    TERM=xterm \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     LANG=C.UTF-8 \
-    PULSE_SERVER=127.0.0.1 \
     /bin/bash --login

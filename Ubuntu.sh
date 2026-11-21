@@ -6,8 +6,7 @@
 
 ROOTFS_DIR=/home/container
 PROOT_BIN="${ROOTFS_DIR}/usr/local/bin/proot"
-UBUNTU_VERSION="24.04"
-UBUNTU_RELEASE="24.04.1"
+UBUNTU_RELEASE="24.04.5"
 PROOT_VERSION="5.3.0"
 
 ARCH=$(uname -m)
@@ -44,11 +43,11 @@ run_proot() {
 ###########################################
 
 if [ ! -e "${ROOTFS_DIR}/.installed" ] || [ ! -x "${ROOTFS_DIR}/usr/bin/env" ]; then
-    rm -f "${ROOTFS_DIR}/.installed"
+    rm -f "${ROOTFS_DIR}/.installed" /tmp/ubuntu-rootfs.tar.gz
 
     echo "[1/4] Downloading Ubuntu ${UBUNTU_RELEASE} (${ARCH_ALT}) base rootfs..."
     curl -fL --progress-bar -o /tmp/ubuntu-rootfs.tar.gz \
-        "https://cdimage.ubuntu.com/ubuntu-base/releases/${UBUNTU_VERSION}/release/ubuntu-base-${UBUNTU_RELEASE}-base-${ARCH_ALT}.tar.gz"
+        "https://cdimage.ubuntu.com/ubuntu-base/releases/noble/release/ubuntu-base-${UBUNTU_RELEASE}-base-${ARCH_ALT}.tar.gz"
 
     echo "[2/4] Extracting rootfs and downloading static PRoot..."
     tar -xzf /tmp/ubuntu-rootfs.tar.gz -C "${ROOTFS_DIR}" --exclude='dev/*'
@@ -114,7 +113,7 @@ clear && cat << 'EOF'
  ╚██████╔╝██████╔╝╚██████╔╝██║ ╚████║   ██║   ╚██████╔╝
   ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝   ╚═╝    ╚═════╝ 
 
- Welcome to Ubuntu 24.04 LTS (XFCE + TigerVNC PRoot)!
+ Welcome to Ubuntu 24.04.5 LTS (XFCE + TigerVNC PRoot)!
 
   -> VNC Display  : :1 (Port 5901)
   -> VNC Password : ubuntu

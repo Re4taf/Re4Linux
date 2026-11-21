@@ -26,7 +26,7 @@ run_proot() {
         --link2symlink \
         --kill-on-exit \
         --root-id \
-        --cwd=/root \
+        --cwd=/ \
         --bind=/dev \
         --bind=/proc \
         --bind=/sys \
@@ -43,31 +43,28 @@ run_proot() {
 # Download & Extract Ubuntu + Static PRoot #
 ###########################################
 
-if [ ! -e "${ROOTFS_DIR}/.installed" ]; then
+if [ ! -e "${ROOTFS_DIR}/.installed" ] || [ ! -x "${ROOTFS_DIR}/usr/bin/env" ]; then
+    rm -f "${ROOTFS_DIR}/.installed"
+
     echo "[1/4] Downloading Ubuntu ${UBUNTU_RELEASE} (${ARCH_ALT}) base rootfs..."
-    curl -Lo /tmp/ubuntu-rootfs.tar.gz \
+    curl -fL --progress-bar -o /tmp/ubuntu-rootfs.tar.gz \
         "https://cdimage.ubuntu.com/ubuntu-base/releases/${UBUNTU_VERSION}/release/ubuntu-base-${UBUNTU_RELEASE}-base-${ARCH_ALT}.tar.gz"
 
     echo "[2/4] Extracting rootfs and downloading static PRoot..."
     tar -xzf /tmp/ubuntu-rootfs.tar.gz -C "${ROOTFS_DIR}" --exclude='dev/*'
     rm -f /tmp/ubuntu-rootfs.tar.gz
 
-    mkdir -p "${ROOTFS_DIR}/usr/local/bin"
-    curl -Lo "${PROOT_BIN}" \
+    mkdir -p "${ROOTFS_DIR}/usr/local/bin" "${ROOTFS_DIR}/root"
+    curl -fL --progress-bar -o "${PROOT_BIN}" \
         "https://github.com/proot-me/proot/releases/download/v${PROOT_VERSION}/proot-v${PROOT_VERSION}-${ARCH}-static"
     chmod 755 "${PROOT_BIN}"
 
     printf "nameserver 1.1.1.1\nnameserver 1.0.0.1\n" > "${ROOTFS_DIR}/etc/resolv.conf"
     echo "127.0.0.1 localhost" > "${ROOTFS_DIR}/etc/hosts"
-fi
 
-###########################################
-# Install XFCE4, D-Bus & TigerVNC         #
-###########################################
-
-if [ ! -e "${ROOTFS_DIR}/.installed" ]; then
     echo "[3/4] Installing XFCE4 and TigerVNC inside Ubuntu..."
     run_proot '
+        mkdir -p /root
         export DEBIAN_FRONTEND=noninteractive
         apt-get update && apt-get upgrade -y
         apt-get install -y --no-install-recommends \
@@ -102,9 +99,10 @@ fi
 ###########################################
 
 run_proot '
-    vncserver -kill :1 >/dev/null 2>&1
+    mkdir -p /root
+    vncserver -kill :1 >/dev/null 2>&1 || true
     rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1
-    vncserver :1 -geometry 1280x720 -depth 24 -localhost no
+    vncserver :1 -geometry 1280x720 -depth 24 -localhost no || true
 '
 
 clear && cat << 'EOF'

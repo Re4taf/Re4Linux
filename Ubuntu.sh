@@ -85,7 +85,6 @@ if [ ! -x "${ROOTFS_DIR}/usr/bin/vncserver" ] || [ ! -x "${ROOTFS_DIR}/usr/bin/s
             xfce4 xfce4-goodies xfce4-terminal \
             dbus-x11 tigervnc-standalone-server tigervnc-common \
             sudo wget curl ca-certificates nano less fonts-dejavu-core
-        apt-get clean
         rm -rf /var/lib/apt/lists/*
     '
 fi

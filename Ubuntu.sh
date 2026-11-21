@@ -40,10 +40,10 @@ run_proot() {
 }
 
 ###########################################
-# Download & Extract Ubuntu + Static PRoot #
+# 1. Download & Extract Base RootFS       #
 ###########################################
 
-if [ ! -e "${ROOTFS_DIR}/.installed" ] || [ ! -x "${ROOTFS_DIR}/usr/bin/env" ]; then
+if [ ! -x "${ROOTFS_DIR}/usr/bin/env" ] || [ ! -x "${PROOT_BIN}" ]; then
     rm -f "${ROOTFS_DIR}/.installed" /tmp/ubuntu-rootfs.tar.gz
 
     echo "[1/4] Downloading Ubuntu ${UBUNTU_RELEASE} (${ARCH_ALT}) base rootfs..."
@@ -61,34 +61,36 @@ if [ ! -e "${ROOTFS_DIR}/.installed" ] || [ ! -x "${ROOTFS_DIR}/usr/bin/env" ]; 
 
     printf "nameserver 1.1.1.1\nnameserver 1.0.0.1\n" > "${ROOTFS_DIR}/etc/resolv.conf"
     echo "127.0.0.1 localhost" > "${ROOTFS_DIR}/etc/hosts"
-
-    if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
-  sed -i 's/Suites: noble noble-updates noble-security/Suites: noble noble-updates noble-backports noble-security/' /etc/apt/sources.list.d/ubuntu.sources
-  sed -i 's/Components: main/Components: main universe/' /etc/apt/sources.list.d/ubuntu.sources
-else
-  printf "deb http://archive.ubuntu.com/ubuntu noble main universe\ndeb http://archive.ubuntu.com/ubuntu noble-updates main universe\ndeb http://archive.ubuntu.com/ubuntu noble-security main universe\n" > /etc/apt/sources.list
 fi
 
-    printf 'APT::Get::AllowUnauthenticated "true";\nAcquire::AllowInsecureRepositories "true";\n' > /etc/apt/apt.conf.d/99-allow-unauth
+###########################################
+# 2. Configure APT & Install XFCE4 + VNC  #
+###########################################
 
-    echo "[3/4] Installing XFCE4 and TigerVNC inside Ubuntu..."
+if [ ! -x "${ROOTFS_DIR}/usr/bin/vncserver" ] || [ ! -x "${ROOTFS_DIR}/usr/bin/startxfce4" ] || [ ! -x "${ROOTFS_DIR}/usr/bin/less" ]; then
+    echo "[3/4] Configuring APT sources (inside PRoot) and installing XFCE4 + TigerVNC..."
     run_proot '
-        mkdir -p /root
+        mkdir -p /root /etc/apt/apt.conf.d
         grep -q ":971:" /etc/group || echo "hostgroup971:x:971:" >> /etc/group
+
+        if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sed -i "s/Components: main/Components: main universe/g" /etc/apt/sources.list.d/ubuntu.sources
+        fi
+        printf "deb http://archive.ubuntu.com/ubuntu noble main universe\ndeb http://archive.ubuntu.com/ubuntu noble-updates main universe\ndeb http://archive.ubuntu.com/ubuntu noble-security main universe\n" > /etc/apt/sources.list
+        echo "APT::Get::AllowUnauthenticated \"true\";" > /etc/apt/apt.conf.d/99-allow-unauth
+
         export DEBIAN_FRONTEND=noninteractive
         apt-get update && apt-get upgrade -y
-        apt-get install -y --no-install-recommends
-        apt-get install xfce4
-        apt-get install xfce4-goodies
-        apt-get install xfce4-terminal
-        apt-get install dbus-x11
-        apt-get install tigervnc-standalone-server
-        apt-get install tigervnc-common
-        sudo wget curl ca-certificates nano less fonts-dejavu-core
+        apt-get install -y --no-install-recommends \
+            xfce4 xfce4-goodies xfce4-terminal \
+            dbus-x11 tigervnc-standalone-server tigervnc-common \
+            sudo wget curl ca-certificates nano less fonts-dejavu-core
         apt-get clean
         rm -rf /var/lib/apt/lists/*
     '
+fi
 
+if [ ! -x "${ROOTFS_DIR}/root/.vnc/xstartup" ] || [ ! -f "${ROOTFS_DIR}/root/.vnc/passwd" ]; then
     echo "[4/4] Configuring TigerVNC startup script and default password ('ubuntu')..."
     run_proot '
         mkdir -p /root/.vnc
@@ -104,12 +106,12 @@ EOF
         chmod +x /root/.vnc/xstartup
         printf "ubuntu\nubuntu\nn\n" | vncpasswd >/dev/null 2>&1
     '
-
-    touch "${ROOTFS_DIR}/.installed"
 fi
 
+touch "${ROOTFS_DIR}/.installed"
+
 ###########################################
-# Ensure Group & Start VNC on Server Port #
+# 3. Start VNC Server & Enter PRoot       #
 ###########################################
 
 run_proot "
@@ -117,7 +119,7 @@ run_proot "
     grep -q ':971:' /etc/group || echo 'hostgroup971:x:971:' >> /etc/group
     vncserver -kill :1 >/dev/null 2>&1 || true
     rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1
-    vncserver :1 -rfbport ${VNC_PORT} -geometry 1280x720 -depth 24 -localhost no || true
+    vncserver :1 -rfbport ${VNC_PORT} -geometry 1280x720 -depth 24 -localhost no
 "
 
 clear && cat << EOF

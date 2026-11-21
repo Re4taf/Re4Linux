@@ -1,134 +1,163 @@
-#!/bin/sh
+#!/data/data/com.termux/files/usr/bin/bash
 
-#############################
-# Ubuntu Linux Installation #
-#############################
+#############################################
+# Termux Ubuntu XFCE + VNC (Harbor-Style)   #
+#############################################
 
-ROOTFS_DIR=/home/container
+# Define the root directory inside Termux home
+ROOTFS_DIR="$HOME/ubuntu-rootfs"
 
-# Verified Ubuntu 24.04.5 LTS Base release
+# Ubuntu Base release configuration (24.04 LTS Noble)
 UBUNTU_VERSION="24.04"
-UBUNTU_FULL_VERSION="24.04.5"
-PROOT_VERSION="5.3.0"
+UBUNTU_RELEASE="24.04.1"
 
-# Detect machine architecture
+# Detect machine architecture and map to Ubuntu tarball naming
 ARCH=$(uname -m)
-
 if [ "$ARCH" = "x86_64" ]; then
-  ARCH_ALT=amd64
+    ARCH_ALT="amd64"
 elif [ "$ARCH" = "aarch64" ]; then
-  ARCH_ALT=arm64
+    ARCH_ALT="arm64"
 else
-  printf "Unsupported CPU architecture: ${ARCH}\n"
-  exit 1
+    printf "Unsupported CPU architecture: %s\n" "${ARCH}"
+    exit 1
 fi
 
-# Self-heal: if .installed exists from a failed run without /bin/bash, remove it
-if [ -e "$ROOTFS_DIR/.installed" ] && [ ! -e "$ROOTFS_DIR/bin/bash" ]; then
-    rm -f "$ROOTFS_DIR/.installed"
+# Ensure host Termux dependencies (proot, curl, tar, pulseaudio) are present
+if ! command -v proot >/dev/null 2>&1 || ! command -v pulseaudio >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+    echo "[*] Installing required Termux host packages..."
+    pkg update -y && pkg install -y proot curl tar pulseaudio
 fi
 
-# Download & extract Ubuntu base rootfs
-if [ ! -e "$ROOTFS_DIR/.installed" ]; then
-    printf "Downloading Ubuntu ${UBUNTU_FULL_VERSION} (${ARCH_ALT})...\n"
-    if ! curl -fsSL "https://cdimage.ubuntu.com/ubuntu-base/releases/${UBUNTU_VERSION}/release/ubuntu-base-${UBUNTU_FULL_VERSION}-base-${ARCH_ALT}.tar.gz" -o /tmp/rootfs.tar.gz; then
-        printf "Error: Failed to download Ubuntu rootfs.\n"
-        exit 1
-    fi
+# Helper function to execute commands inside the PRoot Ubuntu environment
+run_proot() {
+    unset LD_PRELOAD
+    proot \
+        --rootfs="${ROOTFS_DIR}" \
+        --link2symlink \
+        --kill-on-exit \
+        --root-id \
+        --cwd=/root \
+        --bind=/dev \
+        --bind=/proc \
+        --bind=/sys \
+        --bind=/data/data/com.termux/files/usr/tmp:/tmp \
+        /usr/bin/env -i \
+        HOME=/root \
+        TERM="$TERM" \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        LANG=C.UTF-8 \
+        /bin/bash -c "$1"
+}
 
-    printf "Extracting Ubuntu rootfs...\n"
-    if ! tar -xzf /tmp/rootfs.tar.gz -C "$ROOTFS_DIR"; then
-        printf "Error: Failed to extract Ubuntu rootfs.\n"
-        rm -f /tmp/rootfs.tar.gz
-        exit 1
-    fi
-fi
+###########################################
+# Download & Extract Ubuntu Base RootFS   #
+###########################################
 
-################################
-# Package Installation & Setup #
-################################
+if [ ! -e "${ROOTFS_DIR}/.installed" ]; then
+    echo "[1/4] Downloading Ubuntu ${UBUNTU_RELEASE} (${ARCH_ALT}) base rootfs..."
+    mkdir -p "${ROOTFS_DIR}"
+    curl -Lo "${TMPDIR:-/data/data/com.termux/files/usr/tmp}/ubuntu-rootfs.tar.gz" \
+        "https://cdimage.ubuntu.com/ubuntu-base/releases/${UBUNTU_VERSION}/release/ubuntu-base-${UBUNTU_RELEASE}-base-${ARCH_ALT}.tar.gz"
 
-if [ ! -e "$ROOTFS_DIR/.installed" ]; then
-    mkdir -p "$ROOTFS_DIR/usr/local/bin" "$ROOTFS_DIR/root"
+    echo "[2/4] Extracting rootfs to ${ROOTFS_DIR}..."
+    tar -xzf "${TMPDIR:-/data/data/com.termux/files/usr/tmp}/ubuntu-rootfs.tar.gz" -C "${ROOTFS_DIR}" --exclude='dev/*'
+    rm -f "${TMPDIR:-/data/data/com.termux/files/usr/tmp}/ubuntu-rootfs.tar.gz"
 
-    printf "Downloading PRoot and GoTTY...\n"
-    curl -fsSL "https://github.com/sorenisanerd/gotty/releases/download/v1.5.0/gotty_v1.5.0_linux_${ARCH_ALT}.tar.gz" -o /tmp/gotty.tar.gz
-    curl -fsSL "https://github.com/proot-me/proot/releases/download/v${PROOT_VERSION}/proot-v${PROOT_VERSION}-${ARCH}-static" -o "$ROOTFS_DIR/usr/local/bin/proot"
-
-    tar -xzf /tmp/gotty.tar.gz -C "$ROOTFS_DIR/usr/local/bin"
-    chmod 755 "$ROOTFS_DIR/usr/local/bin/proot" "$ROOTFS_DIR/usr/local/bin/gotty"
-
-    # Configure DNS Resolvers
+    # Configure DNS nameservers
     printf "nameserver 1.1.1.1\nnameserver 1.0.0.1\n" > "${ROOTFS_DIR}/etc/resolv.conf"
-
-    # Fix apt sandbox permissions inside PRoot
-    mkdir -p "${ROOTFS_DIR}/etc/apt/apt.conf.d"
-    printf 'APT::Sandbox::User "root";\n' > "${ROOTFS_DIR}/etc/apt/apt.conf.d/01-proot-sandbox"
-
-    # Termux-style 'pkg' wrapper around apt
-    cat << 'EOF' > "$ROOTFS_DIR/usr/local/bin/pkg"
-#!/bin/bash
-case "$1" in
-  install) shift; apt update && apt install -y "$@" ;;
-  uninstall|remove) shift; apt remove -y "$@" ;;
-  update) apt update ;;
-  upgrade) apt update && apt upgrade -y ;;
-  search) shift; apt search "$@" ;;
-  show) shift; apt show "$@" ;;
-  *) echo "Usage: pkg {install|remove|update|upgrade|search|show} [package]" ;;
-esac
-EOF
-    chmod 755 "$ROOTFS_DIR/usr/local/bin/pkg"
-
-    # Clean up temporary archives
-    rm -f /tmp/rootfs.tar.gz /tmp/gotty.tar.gz
-
-    # Verify /bin/bash exists before marking installed
-    if [ -e "$ROOTFS_DIR/bin/bash" ]; then
-        touch "$ROOTFS_DIR/.installed"
-    else
-        printf "Error: /bin/bash missing after extraction.\n"
-        exit 1
-    fi
+    echo "127.0.0.1 localhost" > "${ROOTFS_DIR}/etc/hosts"
 fi
 
-# Print RE4 LINUX welcome banner
-clear && cat << EOF
+###########################################
+# Package Installation & XFCE/VNC Setup   #
+###########################################
 
- ██████╗ ███████╗██╗  ██╗    ██╗     ██╗███╗   ██╗██╗   ██╗██╗  ██╗
- ██╔══██╗██╔════╝██║  ██║    ██║     ██║████╗  ██║██║   ██║╚██╗██╔╝
- ██████╔╝█████╗  ███████║    ██║     ██║██╔██╗ ██║██║   ██║ ╚███╔╝ 
- ██╔══██╗██╔══╝  ╚════██║    ██║     ██║██║╚██╗██║██║   ██║ ██╔██╗ 
- ██║  ██║███████╗     ██║    ███████╗██║██║ ╚████║╚██████╔╝██╔╝ ██╗
- ╚═╝  ╚═╝╚══════╝     ╚═╝    ╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝
+if [ ! -e "${ROOTFS_DIR}/.installed" ]; then
+    echo "[3/4] Installing XFCE4, TigerVNC, and D-Bus inside Ubuntu (this may take a few minutes)..."
+    run_proot '
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update && apt-get upgrade -y
+        apt-get install -y --no-install-recommends \
+            xfce4 xfce4-goodies xfce4-terminal \
+            dbus-x11 tigervnc-standalone-server tigervnc-common \
+            sudo wget curl ca-certificates nano fonts-dejavu-core
+        apt-get clean
+        rm -rf /var/lib/apt/lists/*
+    '
+
+    echo "[4/4] Configuring TigerVNC startup script and default password ('ubuntu')..."
+    run_proot '
+        mkdir -p /root/.vnc
+
+        cat << "EOF" > /root/.vnc/xstartup
+#!/bin/sh
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+export XDG_RUNTIME_DIR=/tmp/runtime-root
+mkdir -p $XDG_RUNTIME_DIR
+chmod 700 $XDG_RUNTIME_DIR
+dbus-launch --exit-with-session startxfce4 &
+EOF
+        chmod +x /root/.vnc/xstartup
+
+        # Set default VNC password to "ubuntu"
+        printf "ubuntu\nubuntu\nn\n" | vncpasswd >/dev/null 2>&1
+    '
+
+    # Mark installation complete (Harbor style flag)
+    touch "${ROOTFS_DIR}/.installed"
+fi
+
+###########################################
+# Start Audio, VNC Server & Enter PRoot   #
+###########################################
+
+# Start PulseAudio on Termux host for audio forwarding
+pulseaudio --start --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" --exit-idle-time=-1 2>/dev/null
+
+# Clean stale VNC locks and start TigerVNC inside Ubuntu
+run_proot '
+    vncserver -kill :1 >/dev/null 2>&1
+    rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1
+    export PULSE_SERVER=127.0.0.1
+    vncserver :1 -geometry 1280x720 -depth 24 -localhost no
+'
+
+clear && cat << 'EOF'
+
+ ██╗   ██╗██████╗ ██╗   ██╗███╗   ██╗████████╗██╗   ██╗
+ ██║   ██║██╔══██╗██║   ██║████╗  ██║╚══██╔══╝██║   ██║
+ ██║   ██║██████╔╝██║   ██║██╔██╗ ██║   ██║   ██║   ██║
+ ██║   ██║██╔══██╗██║   ██║██║╚██╗██║   ██║   ██║   ██║
+ ╚██████╔╝██████╔╝╚██████╔╝██║ ╚████║   ██║   ╚██████╔╝
+  ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝   ╚═╝    ╚═════╝ 
+
+ Welcome to Ubuntu 24.04 LTS (XFCE + TigerVNC PRoot)!
  
- Welcome to Ubuntu ${UBUNTU_FULL_VERSION} (PRoot)!
- 
- Here are some useful commands to get you started:
- 
-    pkg install [package] : install a package (or apt install)
-    pkg remove [package]  : remove a package
-    pkg update            : update the package index
-    pkg upgrade           : upgrade installed packages
-    pkg search [keyword]  : search for a package
-    gotty -p 25628 -w bash : share your terminal in browser
- 
+  -> VNC Server   : 127.0.0.1:5901 (Display :1)
+  -> VNC Password : ubuntu (change with: vncpasswd)
+  -> Audio Server : PulseAudio active on 127.0.0.1
+  -> Stop VNC     : vncserver -kill :1
+  -> Restart VNC  : vncserver :1 -geometry 1280x720 -depth 24 -localhost no
+
 EOF
 
-###########################
-# Start PRoot environment #
-###########################
-
-export PROOT_NO_SECCOMP=1
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-"$ROOTFS_DIR/usr/local/bin/proot" \
---rootfs="${ROOTFS_DIR}" \
---kill-on-exit \
---root-id \
---cwd=/root \
---bind=/proc \
---bind=/dev \
---bind=/sys \
---bind=/tmp \
-/bin/bash -l
+# Drop directly into the interactive Ubuntu PRoot shell (Harbor style)
+unset LD_PRELOAD
+exec proot \
+    --rootfs="${ROOTFS_DIR}" \
+    --link2symlink \
+    --kill-on-exit \
+    --root-id \
+    --cwd=/root \
+    --bind=/dev \
+    --bind=/proc \
+    --bind=/sys \
+    --bind=/data/data/com.termux/files/usr/tmp:/tmp \
+    /usr/bin/env -i \
+    HOME=/root \
+    TERM="$TERM" \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    LANG=C.UTF-8 \
+    PULSE_SERVER=127.0.0.1 \
+    /bin/bash --login

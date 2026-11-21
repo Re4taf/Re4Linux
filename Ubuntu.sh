@@ -62,13 +62,22 @@ if [ ! -e "${ROOTFS_DIR}/.installed" ] || [ ! -x "${ROOTFS_DIR}/usr/bin/env" ]; 
     printf "nameserver 1.1.1.1\nnameserver 1.0.0.1\n" > "${ROOTFS_DIR}/etc/resolv.conf"
     echo "127.0.0.1 localhost" > "${ROOTFS_DIR}/etc/hosts"
 
+    printf 'APT::Get::AllowUnauthenticated "true";\nAcquire::AllowInsecureRepositories "true";\n' > /etc/apt/apt.conf.d/99-allow-unauth
+
     echo "[3/4] Installing XFCE4 and TigerVNC inside Ubuntu..."
     run_proot '
         mkdir -p /root
         grep -q ":971:" /etc/group || echo "hostgroup971:x:971:" >> /etc/group
         export DEBIAN_FRONTEND=noninteractive
         apt-get update && apt-get upgrade -y
-        apt-get install -y --no-install-recommends && apt-get install xfce4 && apt-get install xfce4-goodies && apt-get install xfce4-terminal && apt-get install dbus-x11 && apt-get install tigervnc-standalone-server && apt-get install tigervnc-common && sudo wget curl ca-certificates nano less fonts-dejavu-core
+        apt-get install -y --no-install-recommends
+        apt-get install xfce4
+        apt-get install xfce4-goodies
+        apt-get install xfce4-terminal
+        apt-get install dbus-x11
+        apt-get install tigervnc-standalone-server
+        apt-get install tigervnc-common
+        sudo wget curl ca-certificates nano less fonts-dejavu-core
         apt-get clean
         rm -rf /var/lib/apt/lists/*
     '

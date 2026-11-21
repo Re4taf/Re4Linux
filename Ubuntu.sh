@@ -64,27 +64,41 @@ if [ ! -x "${ROOTFS_DIR}/usr/bin/env" ] || [ ! -x "${PROOT_BIN}" ]; then
 fi
 
 ###########################################
-# 2. Configure APT & Install XFCE4 + VNC  #
+# 2. Fix GPG/Sources & Install XFCE4+VNC  #
 ###########################################
 
 if [ ! -x "${ROOTFS_DIR}/usr/bin/vncserver" ] || [ ! -x "${ROOTFS_DIR}/usr/bin/startxfce4" ] || [ ! -x "${ROOTFS_DIR}/usr/bin/less" ]; then
-    echo "[3/4] Configuring APT sources (inside PRoot) and installing XFCE4 + TigerVNC..."
+    echo "[3/4] Fixing APT keyring/sources and installing XFCE4 + TigerVNC..."
     run_proot '
-        mkdir -p /root /etc/apt/apt.conf.d
+        mkdir -p /root /etc/apt/apt.conf.d /etc/apt/trusted.gpg.d
         grep -q ":971:" /etc/group || echo "hostgroup971:x:971:" >> /etc/group
 
+        rm -f /etc/apt/sources.list
         if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
             sed -i "s/Components: main/Components: main universe/g" /etc/apt/sources.list.d/ubuntu.sources
+        else
+            printf "deb http://archive.ubuntu.com/ubuntu noble main universe\ndeb http://archive.ubuntu.com/ubuntu noble-updates main universe\ndeb http://archive.ubuntu.com/ubuntu noble-security main universe\n" > /etc/apt/sources.list
         fi
-        printf "deb http://archive.ubuntu.com/ubuntu noble main universe\ndeb http://archive.ubuntu.com/ubuntu noble-updates main universe\ndeb http://archive.ubuntu.com/ubuntu noble-security main universe\n" > /etc/apt/sources.list
-        echo "APT::Get::AllowUnauthenticated \"true\";" > /etc/apt/apt.conf.d/99-allow-unauth
+
+        cat << "APTCONF" > /etc/apt/apt.conf.d/99-proot-allow-unauth
+APT::Get::AllowUnauthenticated "true";
+Acquire::AllowInsecureRepositories "true";
+Acquire::AllowDowngradeToInsecureRepositories "true";
+APTCONF
+
+        if command -v gpg >/dev/null 2>&1; then
+            gpg --batch --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 871920D1991BC93C >/dev/null 2>&1 || true
+            gpg --batch --export 871920D1991BC93C > /etc/apt/trusted.gpg.d/ubuntu-noble.gpg 2>/dev/null || true
+        fi
 
         export DEBIAN_FRONTEND=noninteractive
-        apt-get update && apt-get upgrade -y
-        apt-get install -y --no-install-recommends \
+        apt-get update --allow-insecure-repositories || apt-get update
+        apt-get install -y --allow-unauthenticated --no-install-recommends \
+            ubuntu-keyring ca-certificates gnupg \
             xfce4 xfce4-goodies xfce4-terminal \
             dbus-x11 tigervnc-standalone-server tigervnc-common \
-            sudo wget curl ca-certificates nano less fonts-dejavu-core
+            sudo wget curl nano less fonts-dejavu-core
+        apt-get clean
         rm -rf /var/lib/apt/lists/*
     '
 fi

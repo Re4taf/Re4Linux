@@ -8,6 +8,7 @@ ROOTFS_DIR=/home/container
 PROOT_BIN="${ROOTFS_DIR}/usr/local/bin/proot"
 UBUNTU_RELEASE="24.04.5"
 PROOT_VERSION="5.3.0"
+VNC_PORT="${SERVER_PORT:-25628}"
 
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then
@@ -64,12 +65,13 @@ if [ ! -e "${ROOTFS_DIR}/.installed" ] || [ ! -x "${ROOTFS_DIR}/usr/bin/env" ]; 
     echo "[3/4] Installing XFCE4 and TigerVNC inside Ubuntu..."
     run_proot '
         mkdir -p /root
+        grep -q ":971:" /etc/group || echo "hostgroup971:x:971:" >> /etc/group
         export DEBIAN_FRONTEND=noninteractive
         apt-get update && apt-get upgrade -y
         apt-get install -y --no-install-recommends \
             xfce4 xfce4-goodies xfce4-terminal \
             dbus-x11 tigervnc-standalone-server tigervnc-common \
-            sudo wget curl ca-certificates nano fonts-dejavu-core
+            sudo wget curl ca-certificates nano less fonts-dejavu-core
         apt-get clean
         rm -rf /var/lib/apt/lists/*
     '
@@ -94,17 +96,18 @@ EOF
 fi
 
 ###########################################
-# Start VNC Server & Enter PRoot          #
+# Ensure Group & Start VNC on Server Port #
 ###########################################
 
-run_proot '
+run_proot "
     mkdir -p /root
+    grep -q ':971:' /etc/group || echo 'hostgroup971:x:971:' >> /etc/group
     vncserver -kill :1 >/dev/null 2>&1 || true
     rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1
-    vncserver :1 -geometry 1280x720 -depth 24 -localhost no || true
-'
+    vncserver :1 -rfbport ${VNC_PORT} -geometry 1280x720 -depth 24 -localhost no || true
+"
 
-clear && cat << 'EOF'
+clear && cat << EOF
 
  ██╗   ██╗██████╗ ██╗   ██╗███╗   ██╗████████╗██╗   ██╗
  ██║   ██║██╔══██╗██║   ██║████╗  ██║╚══██╔══╝██║   ██║
@@ -115,10 +118,10 @@ clear && cat << 'EOF'
 
  Welcome to Ubuntu 24.04.5 LTS (XFCE + TigerVNC PRoot)!
 
-  -> VNC Display  : :1 (Port 5901)
-  -> VNC Password : ubuntu
+  -> VNC Address  : zannserver:${VNC_PORT} (Display :1)
+  -> VNC Password : ubuntu (change with: vncpasswd)
   -> Stop VNC     : vncserver -kill :1
-  -> Restart VNC  : vncserver :1 -geometry 1280x720 -depth 24 -localhost no
+  -> Restart VNC  : vncserver :1 -rfbport ${VNC_PORT} -geometry 1280x720 -depth 24 -localhost no
 
 EOF
 

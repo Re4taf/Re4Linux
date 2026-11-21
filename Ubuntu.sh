@@ -62,6 +62,13 @@ if [ ! -e "${ROOTFS_DIR}/.installed" ] || [ ! -x "${ROOTFS_DIR}/usr/bin/env" ]; 
     printf "nameserver 1.1.1.1\nnameserver 1.0.0.1\n" > "${ROOTFS_DIR}/etc/resolv.conf"
     echo "127.0.0.1 localhost" > "${ROOTFS_DIR}/etc/hosts"
 
+    if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+  sed -i 's/Suites: noble noble-updates noble-security/Suites: noble noble-updates noble-backports noble-security/' /etc/apt/sources.list.d/ubuntu.sources
+  sed -i 's/Components: main/Components: main universe/' /etc/apt/sources.list.d/ubuntu.sources
+else
+  printf "deb http://archive.ubuntu.com/ubuntu noble main universe\ndeb http://archive.ubuntu.com/ubuntu noble-updates main universe\ndeb http://archive.ubuntu.com/ubuntu noble-security main universe\n" > /etc/apt/sources.list
+fi
+
     printf 'APT::Get::AllowUnauthenticated "true";\nAcquire::AllowInsecureRepositories "true";\n' > /etc/apt/apt.conf.d/99-allow-unauth
 
     echo "[3/4] Installing XFCE4 and TigerVNC inside Ubuntu..."

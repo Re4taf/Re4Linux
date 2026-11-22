@@ -26,11 +26,12 @@ download_file() {
     url="$1"
     dest="$2"
     tmp_dest="${dest}.partial"
+    rm -f "${tmp_dest}"
 
     if command -v curl >/dev/null 2>&1; then
-        curl -fL --retry 3 --connect-timeout 15 -o "${tmp_dest}" "${url}"
+        curl -fL --retry 3 --retry-delay 2 --connect-timeout 30 --max-time 600 -o "${tmp_dest}" "${url}"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q --tries=3 --timeout=15 -O "${tmp_dest}" "${url}"
+        wget -q --tries=3 --waitretry=2 --timeout=60 -O "${tmp_dest}" "${url}"
     elif command -v node >/dev/null 2>&1; then
         node -e '
             const fs = require("fs");
@@ -39,45 +40,69 @@ download_file() {
             const url = process.argv[1];
             const dest = process.argv[2];
 
-            const fetchToFile = (target, hops = 0) => {
-                if (hops > 8) {
-                    console.error("Too many redirects");
-                    process.exit(1);
-                }
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+            const downloadOnce = (target, hops = 0) => new Promise((resolve, reject) => {
+                if (hops > 8) return reject(new Error("Too many redirects"));
                 const parsed = new URL(target);
                 const client = parsed.protocol === "http:" ? http : https;
                 const req = client.get(parsed, {
-                    headers: { "User-Agent": "pterovm-installer" },
-                    timeout: 15000
+                    headers: {
+                        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) pterovm-installer",
+                        "Accept": "*/*"
+                    }
                 }, (res) => {
                     if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
                         const nextUrl = new URL(res.headers.location, parsed.toString()).toString();
-                        return fetchToFile(nextUrl, hops + 1);
+                        res.resume();
+                        return resolve(downloadOnce(nextUrl, hops + 1));
                     }
                     if (res.statusCode < 200 || res.statusCode >= 300) {
-                        console.error("HTTP status:", res.statusCode);
-                        process.exit(1);
+                        res.resume();
+                        return reject(new Error("HTTP status: " + res.statusCode));
                     }
                     const out = fs.createWriteStream(dest);
-                    res.pipe(out);
-                    out.on("finish", () => out.close(() => process.exit(0)));
-                    out.on("error", (err) => {
-                        console.error(err.message);
-                        process.exit(1);
+                    let settled = false;
+                    const fail = (err) => {
+                        if (!settled) {
+                            settled = true;
+                            out.destroy();
+                            fs.rm(dest, { force: true }, () => reject(err));
+                        }
+                    };
+                    res.on("error", fail);
+                    out.on("error", fail);
+                    out.on("finish", () => {
+                        if (!settled) {
+                            settled = true;
+                            out.close(() => resolve());
+                        }
                     });
+                    res.pipe(out);
                 });
-                req.on("timeout", () => {
-                    req.destroy();
-                    console.error("Request timed out");
-                    process.exit(1);
-                });
-                req.on("error", (err) => {
-                    console.error(err.message);
-                    process.exit(1);
-                });
-            };
 
-            fetchToFile(url);
+                req.setTimeout(30000, () => {
+                    req.destroy(new Error("Socket idle timeout after 30s"));
+                });
+                req.on("error", reject);
+            });
+
+            (async () => {
+                const maxAttempts = 3;
+                for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                    try {
+                        await downloadOnce(url);
+                        process.exit(0);
+                    } catch (err) {
+                        console.error("Attempt " + attempt + "/" + maxAttempts + " failed: " + err.message);
+                        if (attempt < maxAttempts) {
+                            await sleep(2000 * attempt);
+                        } else {
+                            process.exit(1);
+                        }
+                    }
+                }
+            })();
         ' "${url}" "${tmp_dest}"
     else
         echo "[-] Neither curl, wget, nor node is available to download PteroVM." >&2

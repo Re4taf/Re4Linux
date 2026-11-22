@@ -1,3 +1,28 @@
+#!/bin/sh
+# Desktop inside the embedded Alpine system. The panel port is already public.
+set -eu
+unset WAYLAND_DISPLAY WAYLAND_SOCKET || true
+export HOME=/root
+export DISPLAY=:1
+export XDG_SESSION_TYPE=x11
+export SHELL=/bin/bash
+cd /root
+
+GEOMETRY="${VNC_GEOMETRY:-1280x720x24}"
+PORT="${SERVER_PORT:-8080}"
+# Classic VNC keeps 8 characters. x11vnc -storepasswd writes a binary blob, and
+# -passwdfile on this build reads a text line (fgets). A blob with a NUL or
+# newline makes x11vnc exit, and a blob without one is not the typed password.
+PASS=$(printf '%s' "${VNC_PASSWORD:-pterovm}" | tr -d '\r\n')
+PASS=$(printf '%.8s' "$PASS")
+if [ -z "$PASS" ]; then
+    PASS=pterovm
+fi
+
+mkdir -p /root /var/log
+mkdir -p /tmp/.X11-unix 2>/dev/null || true
+umask 077
+printf '%s\n' "$PASS" > /root/vnc.pass
 chmod 600 /root/vnc.pass
 
 # Xvfb is not a real X server. -ac lets local clients connect; -noreset keeps

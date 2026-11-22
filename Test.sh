@@ -1,125 +1,121 @@
 #!/bin/sh
 
-##############################################
-# Fetch from GitHub & Launch on Port #
-##############################################
+########################################################
+# Test.sh - Fetch PteroVM Jar (curl/wget/node fallback) #
+########################################################
 
-WORK_DIR="/home/container"
-REPO_SLUG="Afnanksalal/Ptero-vm"
-PTEROVM_URL="${PTEROVM_URL:-}"
+set -eu
+
+WORK_DIR="${PWD:-/home/container}"
+SERVER_JARFILE="${SERVER_JARFILE:-server.jar}"
+DOWNLOAD_URL="${DOWNLOAD_URL:-}"
 WEB_PORT="${SERVER_PORT:-25628}"
-JAR_NAME="server.jar"
+VNC_PASSWORD="${VNC_PASSWORD:-}"
 
-ARCH=$(uname -m)
-if [ "$ARCH" = "x86_64" ]; then
-    ARCH_JAR="pterovm-x86_64.jar"
-elif [ "$ARCH" = "aarch64" ]; then
-    ARCH_JAR="pterovm-aarch64.jar"
-else
-    printf "Unsupported CPU architecture: %s\n" "${ARCH}"
-    exit 1
-fi
-
-http_get() {
-    url="$1"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$url"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -qO- "$url"
-    elif command -v node >/dev/null 2>&1; then
-        node -e '
-            const https = require("https");
-            const url = process.argv[1];
-            const fetchUrl = (target, hops = 0) => {
-                if (hops > 5) { console.error("Too many redirects"); process.exit(1); }
-                https.get(target, { headers: { "User-Agent": "pterovm-fetcher" } }, (res) => {
-                    if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
-                        return fetchUrl(new URL(res.headers.location, target).toString(), hops + 1);
-                    }
-                    if (res.statusCode < 200 || res.statusCode >= 300) {
-                        console.error("HTTP status:", res.statusCode);
-                        process.exit(1);
-                    }
-                    let data = "";
-                    res.on("data", (chunk) => data += chunk);
-                    res.on("end", () => process.stdout.write(data));
-                }).on("error", (err) => { console.error(err.message); process.exit(1); });
-            };
-            fetchUrl(url);
-        ' "$url"
-    else
-        echo "[-] Neither curl, wget, nor node is available to download files." >&2
-        return 1
-    fi
-}
+case "$(uname -m)" in
+    x86_64) ARCH=x86_64 ;;
+    aarch64|arm64) ARCH=aarch64 ;;
+    riscv64) ARCH=riscv64 ;;
+    *)
+        echo "PteroVM is x86_64, aarch64, or riscv64. This machine is $(uname -m)."
+        exit 1
+        ;;
+esac
 
 download_file() {
     url="$1"
     dest="$2"
+    tmp_dest="${dest}.partial"
+
     if command -v curl >/dev/null 2>&1; then
-        curl -fL --progress-bar -o "$dest" "$url"
+        curl -fL --retry 3 --connect-timeout 15 -o "${tmp_dest}" "${url}"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q --show-progress -O "$dest" "$url"
+        wget -q --tries=3 --timeout=15 -O "${tmp_dest}" "${url}"
     elif command -v node >/dev/null 2>&1; then
         node -e '
             const fs = require("fs");
             const https = require("https");
+            const http = require("http");
             const url = process.argv[1];
             const dest = process.argv[2];
+
             const fetchToFile = (target, hops = 0) => {
-                if (hops > 5) { console.error("Too many redirects"); process.exit(1); }
-                https.get(target, { headers: { "User-Agent": "pterovm-fetcher" } }, (res) => {
+                if (hops > 8) {
+                    console.error("Too many redirects");
+                    process.exit(1);
+                }
+                const parsed = new URL(target);
+                const client = parsed.protocol === "http:" ? http : https;
+                const req = client.get(parsed, {
+                    headers: { "User-Agent": "pterovm-installer" },
+                    timeout: 15000
+                }, (res) => {
                     if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
-                        return fetchToFile(new URL(res.headers.location, target).toString(), hops + 1);
+                        const nextUrl = new URL(res.headers.location, parsed.toString()).toString();
+                        return fetchToFile(nextUrl, hops + 1);
                     }
                     if (res.statusCode < 200 || res.statusCode >= 300) {
                         console.error("HTTP status:", res.statusCode);
                         process.exit(1);
                     }
-                    const file = fs.createWriteStream(dest);
-                    res.pipe(file);
-                    file.on("finish", () => file.close(() => process.exit(0)));
-                }).on("error", (err) => { console.error(err.message); process.exit(1); });
+                    const out = fs.createWriteStream(dest);
+                    res.pipe(out);
+                    out.on("finish", () => out.close(() => process.exit(0)));
+                    out.on("error", (err) => {
+                        console.error(err.message);
+                        process.exit(1);
+                    });
+                });
+                req.on("timeout", () => {
+                    req.destroy();
+                    console.error("Request timed out");
+                    process.exit(1);
+                });
+                req.on("error", (err) => {
+                    console.error(err.message);
+                    process.exit(1);
+                });
             };
+
             fetchToFile(url);
-        ' "$url" "$dest"
+        ' "${url}" "${tmp_dest}"
     else
-        echo "[-] Neither curl, wget, nor node is available to download files." >&2
-        return 1
+        echo "[-] Neither curl, wget, nor node is available to download PteroVM." >&2
+        exit 1
     fi
+
+    if [ ! -s "${tmp_dest}" ]; then
+        rm -f "${tmp_dest}"
+        echo "[-] Downloaded file is empty: ${dest}" >&2
+        exit 1
+    fi
+
+    mv -f "${tmp_dest}" "${dest}"
 }
 
 mkdir -p "${WORK_DIR}"
-cd "${WORK_DIR}" || exit 1
+cd "${WORK_DIR}"
 
-if [ -z "${PTEROVM_URL}" ]; then
-    echo "[*] Querying GitHub latest release for ${REPO_SLUG} (${ARCH_JAR})..."
-    RELEASE_JSON=$(http_get "https://api.github.com/repos/${REPO_SLUG}/releases/latest") || exit 1
-    PTEROVM_URL=$(
-        printf "%s\n" "${RELEASE_JSON}" |
-        grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"' |
-        cut -d'"' -f4 |
-        grep -iE "${ARCH_JAR}|${ARCH}" |
-        head -n 1
-    )
+if [ -n "${DOWNLOAD_URL}" ]; then
+    echo "Downloading PteroVM"
+    download_file "${DOWNLOAD_URL}" "${SERVER_JARFILE}"
+elif [ -f "${SERVER_JARFILE}" ]; then
+    echo "Keeping the existing ${SERVER_JARFILE}"
+else
+    URL="https://github.com/Afnanksalal/Ptero-vm/releases/download/v2.1-${ARCH}/pterovm-${ARCH}.jar"
+    echo "Downloading PteroVM for ${ARCH}"
+    download_file "${URL}" "${SERVER_JARFILE}"
 fi
 
-if [ -z "${PTEROVM_URL}" ]; then
-    echo "[-] Could not automatically resolve a release download URL for ${ARCH_JAR}."
-    echo "[-] Set PTEROVM_URL to the exact GitHub release .jar URL and run this script again."
-    exit 1
+echo "PteroVM jar is ready."
+
+if command -v java >/dev/null 2>&1; then
+    echo "Starting PteroVM (${SERVER_JARFILE}) on port ${WEB_PORT}..."
+    if [ -n "${VNC_PASSWORD}" ]; then
+        exec java -Dserver.port="${WEB_PORT}" -Dport="${WEB_PORT}" -Dvnc.password="${VNC_PASSWORD}" -Xms128M -XX:MaxRAMPercentage=95.0 -jar "${SERVER_JARFILE}"
+    else
+        exec java -Dserver.port="${WEB_PORT}" -Dport="${WEB_PORT}" -Xms128M -XX:MaxRAMPercentage=95.0 -jar "${SERVER_JARFILE}"
+    fi
+else
+    echo "Note: 'java' is not installed in this container image; ${SERVER_JARFILE} is saved in ${WORK_DIR}."
 fi
-
-echo "[*] Downloading PteroVM from: ${PTEROVM_URL}"
-download_file "${PTEROVM_URL}" "${WORK_DIR}/${JAR_NAME}.tmp" || exit 1
-mv -f "${WORK_DIR}/${JAR_NAME}.tmp" "${WORK_DIR}/${JAR_NAME}"
-chmod 644 "${WORK_DIR}/${JAR_NAME}"
-
-if ! command -v java >/dev/null 2>&1; then
-    echo "[-] Java runtime ('java') is not installed in this container."
-    echo "[-] Switch your Pterodactyl server's Docker image to a Java egg image (e.g., Java 17 or 21) and restart."
-    exit 1
-fi
-
-echo "[*] Starting PteroVM (${JAR_NAME}) on port ${WEB_PORT}..."
-exec java -Dserver.port="${WEB_PORT}" -Dport="${WEB_PORT}" -jar "${WORK_DIR}/${JAR_NAME}"

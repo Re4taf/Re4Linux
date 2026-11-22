@@ -1,14 +1,14 @@
 #!/bin/sh
 
 ########################################################
-# Manually Extract server.jar into /home/container/jar #
+# Manually Extract server.jar into /home/container/    #
 ########################################################
 
 set -eu
 
 WORK_DIR="/home/container"
 JAR_FILE="${WORK_DIR}/server.jar"
-OUT_DIR="${WORK_DIR}/jar"
+OUT_DIR="${WORK_DIR}"
 
 mkdir -p "${WORK_DIR}"
 cd "${WORK_DIR}"
@@ -18,17 +18,14 @@ if [ ! -f "${JAR_FILE}" ]; then
     exit 1
 fi
 
-rm -rf "${OUT_DIR}"
-mkdir -p "${OUT_DIR}"
-
 if command -v unzip >/dev/null 2>&1; then
-    echo "[*] Extracting ${JAR_FILE} using unzip -> ${OUT_DIR}"
+    echo "[*] Extracting ${JAR_FILE} using unzip -> ${OUT_DIR}/"
     unzip -oq "${JAR_FILE}" -d "${OUT_DIR}"
 elif command -v jar >/dev/null 2>&1; then
-    echo "[*] Extracting ${JAR_FILE} using jar -> ${OUT_DIR}"
-    (cd "${OUT_DIR}" && jar xf "${JAR_FILE}")
+    echo "[*] Extracting ${JAR_FILE} using jar -> ${OUT_DIR}/"
+    jar xf "${JAR_FILE}"
 elif command -v python3 >/dev/null 2>&1; then
-    echo "[*] Extracting ${JAR_FILE} using python3 -> ${OUT_DIR}"
+    echo "[*] Extracting ${JAR_FILE} using python3 -> ${OUT_DIR}/"
     python3 -c '
 import os, sys, zipfile
 
@@ -52,7 +49,7 @@ with zipfile.ZipFile(jar_path, "r") as zf:
                     pass
 ' "${JAR_FILE}" "${OUT_DIR}"
 elif command -v node >/dev/null 2>&1; then
-    echo "[*] Extracting ${JAR_FILE} using node -> ${OUT_DIR}"
+    echo "[*] Extracting ${JAR_FILE} using node -> ${OUT_DIR}/"
     node -e '
 const fs = require("fs");
 const path = require("path");
@@ -141,5 +138,5 @@ else
     exit 1
 fi
 
-echo "[+] Done! Extracted contents into: ${OUT_DIR}"
+echo "[+] Done! Extracted contents directly into: ${OUT_DIR}/"
 ls -la "${OUT_DIR}"

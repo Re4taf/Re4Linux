@@ -1,59 +1,142 @@
 #!/bin/sh
-# Desktop inside the embedded Alpine system. The panel port is already public.
+
+########################################################
+# Manually Extract server.jar into /home/container/    #
+########################################################
+
 set -eu
-unset WAYLAND_DISPLAY WAYLAND_SOCKET || true
-export HOME=/root
-export DISPLAY=:1
-export XDG_SESSION_TYPE=x11
-export SHELL=/bin/bash
-cd /root
 
-GEOMETRY="${VNC_GEOMETRY:-1280x720x24}"
-PORT="${SERVER_PORT:-8080}"
-# Classic VNC keeps 8 characters. x11vnc -storepasswd writes a binary blob, and
-# -passwdfile on this build reads a text line (fgets). A blob with a NUL or
-# newline makes x11vnc exit, and a blob without one is not the typed password.
-PASS=$(printf '%s' "${VNC_PASSWORD:-pterovm}" | tr -d '\r\n')
-PASS=$(printf '%.8s' "$PASS")
-if [ -z "$PASS" ]; then
-    PASS=pterovm
-fi
+WORK_DIR="/home/container"
+JAR_FILE="${WORK_DIR}/server.jar"
+OUT_DIR="${WORK_DIR}"
 
-mkdir -p /root /var/log
-mkdir -p /tmp/.X11-unix 2>/dev/null || true
-umask 077
-printf '%s\n' "$PASS" > /root/vnc.pass
-chmod 600 /root/vnc.pass
+mkdir -p "${WORK_DIR}"
+cd "${WORK_DIR}"
 
-# Xvfb is not a real X server. -ac lets local clients connect; -noreset keeps
-# the screen up if the first client exits.
-Xvfb :1 -screen 0 "$GEOMETRY" -ac -noreset >/var/log/xvfb.log 2>&1 &
-i=0
-while [ ! -e /tmp/.X11-unix/X1 ] && [ "$i" -lt 50 ]; do
-    i=$((i + 1))
-    sleep 0.1
-done
-
-fluxbox >/var/log/fluxbox.log 2>&1 &
-xterm -geometry 110x32+24+24 -fa 'DejaVu Sans Mono' -fs 11 -title 'PteroVM' >/var/log/xterm.log 2>&1 &
-# Raw VNC stays on localhost. The allocated port is the noVNC page only.
-x11vnc -display :1 -rfbport 5900 -localhost -forever -shared -noxdamage \
-    -passwdfile /root/vnc.pass >/var/log/x11vnc.log 2>&1 &
-sleep 0.4
-if ! pidof x11vnc >/dev/null 2>&1; then
-    echo "x11vnc failed to start" >&2
-    cat /var/log/x11vnc.log >&2 || true
+if [ ! -f "${JAR_FILE}" ]; then
+    echo "[-] ${JAR_FILE} not found." >&2
     exit 1
 fi
 
-WS="$(command -v websockify || command -v websockify-3.12 || true)"
-if [ -z "$WS" ]; then
-    echo "websockify is missing from the embedded system" >&2
+if command -v unzip >/dev/null 2>&1; then
+    echo "[*] Extracting ${JAR_FILE} using unzip -> ${OUT_DIR}/"
+    unzip -oq "${JAR_FILE}" -d "${OUT_DIR}"
+elif command -v jar >/dev/null 2>&1; then
+    echo "[*] Extracting ${JAR_FILE} using jar -> ${OUT_DIR}/"
+    jar xf "${JAR_FILE}"
+elif command -v python3 >/dev/null 2>&1; then
+    echo "[*] Extracting ${JAR_FILE} using python3 -> ${OUT_DIR}/"
+    python3 -c '
+import os, sys, zipfile
+
+jar_path, out_dir = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(jar_path, "r") as zf:
+    for info in zf.infolist():
+        target = os.path.normpath(os.path.join(out_dir, info.filename))
+        if not target.startswith(os.path.abspath(out_dir) + os.sep) and target != os.path.abspath(out_dir):
+            continue
+        if info.is_dir() or info.filename.endswith("/"):
+            os.makedirs(target, exist_ok=True)
+        else:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with zf.open(info, "r") as src, open(target, "wb") as dst:
+                dst.write(src.read())
+            mode = (info.external_attr >> 16) & 0o777
+            if mode:
+                try:
+                    os.chmod(target, mode)
+                except OSError:
+                    pass
+' "${JAR_FILE}" "${OUT_DIR}"
+elif command -v node >/dev/null 2>&1; then
+    echo "[*] Extracting ${JAR_FILE} using node -> ${OUT_DIR}/"
+    node -e '
+const fs = require("fs");
+const path = require("path");
+const zlib = require("zlib");
+
+const jarPath = process.argv[1];
+const outDir = process.argv[2];
+const buf = fs.readFileSync(jarPath);
+
+// Locate End of Central Directory (EOCD) signature: 0x06054b50
+let eocd = -1;
+const minPos = Math.max(0, buf.length - 65557);
+for (let i = buf.length - 22; i >= minPos; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+        const commentLen = buf.readUInt16LE(i + 20);
+        if (i + 22 + commentLen === buf.length) {
+            eocd = i;
+            break;
+        }
+    }
+}
+if (eocd === -1) {
+    console.error("[-] Invalid ZIP/JAR: EOCD not found");
+    process.exit(1);
+}
+
+const totalEntries = buf.readUInt16LE(eocd + 10);
+let cdOffset = buf.readUInt32LE(eocd + 16);
+const resolvedOut = path.resolve(outDir);
+
+for (let n = 0; n < totalEntries; n++) {
+    if (cdOffset + 46 > buf.length || buf.readUInt32LE(cdOffset) !== 0x02014b50) {
+        console.error("[-] Invalid central directory entry at", cdOffset);
+        process.exit(1);
+    }
+    const method = buf.readUInt16LE(cdOffset + 10);
+    const compSize = buf.readUInt32LE(cdOffset + 20);
+    const nameLen = buf.readUInt16LE(cdOffset + 28);
+    const extraLen = buf.readUInt16LE(cdOffset + 30);
+    const commentLen = buf.readUInt16LE(cdOffset + 32);
+    const extAttr = buf.readUInt32LE(cdOffset + 38);
+    const localOffset = buf.readUInt32LE(cdOffset + 42);
+
+    const rawName = buf.subarray(cdOffset + 46, cdOffset + 46 + nameLen).toString("utf8");
+    cdOffset += 46 + nameLen + extraLen + commentLen;
+
+    if (!rawName || rawName.includes("..")) continue;
+    const target = path.resolve(resolvedOut, rawName);
+    if (!target.startsWith(resolvedOut + path.sep) && target !== resolvedOut) continue;
+
+    if (rawName.endsWith("/")) {
+        fs.mkdirSync(target, { recursive: true });
+        continue;
+    }
+
+    if (localOffset + 30 > buf.length || buf.readUInt32LE(localOffset) !== 0x04034b50) {
+        continue;
+    }
+    const lhNameLen = buf.readUInt16LE(localOffset + 26);
+    const lhExtraLen = buf.readUInt16LE(localOffset + 28);
+    const dataStart = localOffset + 30 + lhNameLen + lhExtraLen;
+    const dataEnd = dataStart + compSize;
+    if (dataEnd > buf.length) continue;
+
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const rawData = buf.subarray(dataStart, dataEnd);
+    let outData;
+    if (method === 0) {
+        outData = rawData;
+    } else if (method === 8) {
+        outData = zlib.inflateRawSync(rawData);
+    } else {
+        console.warn("[!] Skipping unsupported compression method", method, "for", rawName);
+        continue;
+    }
+
+    fs.writeFileSync(target, outData);
+    const mode = (extAttr >>> 16) & 0o777;
+    if (mode) {
+        try { fs.chmodSync(target, mode); } catch (_) {}
+    }
+}
+' "${JAR_FILE}" "${OUT_DIR}"
+else
+    echo "[-] No extraction tool (unzip, jar, python3, node) available." >&2
     exit 1
 fi
-"$WS" --web /usr/share/novnc "0.0.0.0:${PORT}" localhost:5900 >/var/log/novnc.log 2>&1 &
 
-printf 'PteroVM desktop listening on %s\n' "$PORT"
-printf 'Right-click the desktop for a terminal, files, or htop.\n'
-# This bash is the panel console. It is not a TTY. The xterm is.
-exec /bin/bash --noprofile --norc
+echo "[+] Done! Extracted contents directly into: ${OUT_DIR}/"
+ls -la "${OUT_DIR}"

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 ##############################################
-# Fetch PteroVM from GitHub & Launch on Port #
+# Fetch from GitHub & Launch on Port #
 ##############################################
 
 WORK_DIR="/home/container"
